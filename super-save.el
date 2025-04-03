@@ -44,6 +44,11 @@
   (make-sparse-keymap)
   "super-save mode's keymap.")
 
+(defcustom super-save-idle-exclude-regexp nil
+  "Regexp to exclude files during idle-triggered saves only."
+  :group 'super-save
+  :type '(choice regexp (const nil)))
+
 (defcustom super-save-triggers
   '(switch-to-buffer other-window windmove-up windmove-down windmove-left windmove-right next-buffer previous-buffer)
   "A list of commands which would trigger `super-save-command'."
@@ -101,7 +106,7 @@ See `super-save-auto-save-when-idle'."
 Set to `except-current-line' if you want to avoid the current line."
   :group 'super-save
   :type '(choice (boolean :tag "Enable/disable deleting trailing whitespace for the whole buffer.")
-          (symbol :tag "Delete trailing whitespace except the current line." except-current-line))
+                 (symbol :tag "Delete trailing whitespace except the current line." except-current-line))
   :package-version '(super-save . "0.4.0"))
 
 (defcustom super-save-exclude nil
@@ -166,26 +171,33 @@ See `super-save-delete-trailing-whitespace'."
    (super-save-delete-trailing-whitespace
     (delete-trailing-whitespace))))
 
-(defun super-save-buffer (buffer)
-  "Save BUFFER if needed, super-save style."
-  (with-current-buffer buffer
-    (save-excursion
-      (when (super-save-p)
-        (super-save-delete-trailing-whitespace-maybe)
-        (if super-save-silent
-            (with-temp-message ""
-              (let ((inhibit-message t)
-                    (inhibit-redisplay t)
-                    (message-log-max nil))
-                (basic-save-buffer)))
-          (basic-save-buffer))))))
+(defun super-save-buffer (buffer &optional idle-trigger)
+     "Save BUFFER if needed. If IDLE-TRIGGER is non-nil, apply idle-specific checks."
+     (with-current-buffer buffer
+       (save-excursion
+         (when (and (super-save-p)
+                    ;; 仅在 idle 触发时检查额外条件
+                    (or (not idle-trigger)
+                        (not (and super-save-idle-exclude-regexp
+                                  buffer-file-name
+                                  (string-match-p super-save-idle-exclude-regexp buffer-file-name)))))
+           (super-save-delete-trailing-whitespace-maybe)
+           (if super-save-silent
+               (with-temp-message ""
+                 (let ((inhibit-message t)
+                       (inhibit-redisplay t)
+                       (message-log-max nil))
+                   (basic-save-buffer)))
+             (basic-save-buffer))))))
 
-(defun super-save-command ()
+(defun super-save-command (&optional idle-trigger)
   "Save the relevant buffers if needed.
 
 When `super-save-all-buffers' is non-nil, save all modified buffers, else, save
-only the current buffer."
-  (mapc #'super-save-buffer (if super-save-all-buffers (buffer-list) (list (current-buffer)))))
+only the current buffer.
+If IDLE-TRIGGER is non-nil, apply idle-specific filters. "
+    (mapc (lambda (buf) (super-save-buffer buf idle-trigger))
+        (if super-save-all-buffers (buffer-list) (list (current-buffer)))))
 
 (defvar super-save-idle-timer)
 
@@ -211,7 +223,8 @@ only the current buffer."
   "Initialize super-save idle timer if `super-save-auto-save-when-idle' is true."
   (setq super-save-idle-timer
         (when super-save-auto-save-when-idle
-          (run-with-idle-timer super-save-idle-duration t #'super-save-command))))
+          (run-with-idle-timer super-save-idle-duration t (lambda ()
+                                                            (super-save-command t))))))
 
 (defun super-save-stop-idle-timer ()
   "Stop super-save idle timer if `super-save-idle-timer' is set."
